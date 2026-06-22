@@ -60,6 +60,7 @@ async def send_welcome_message(user: discord.User):
 - I will broadcast your request to all servers I'm in.
 - Teams can then accept your scrim request.
 - Only users with 'Admin' or 'Owner' roles (or server owner) can use `/findscrim`.
+- [click me to add me to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot)
 {separator_blurple}
 """, inline=False)
     embed.add_field(name="Important:", value=f"""
