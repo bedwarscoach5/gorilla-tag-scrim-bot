@@ -45,29 +45,29 @@ async def send_welcome_message(user: discord.User):
     if user.id in users_who_received_requirements:
         return
 
-    # ANSI colored separators for the requirements message
-    separator_mint = "```ansi\n\u001b[1;36m————————————————————————————————————\u001b[0m\n```"
-    separator_blurple = "```ansi\n\u001b[1;34m————————————————————————————————————\u001b[0m\n```"
+    # ANSI colored separators for a clean aesthetic
+    mint_line = "```ansi\n\u001b[1;36m▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\u001b[0m\n```"
+    blurple_line = "```ansi\n\u001b[1;34m▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\u001b[0m\n```"
 
     embed = discord.Embed(
-        title="Welcome to the Gorilla Tag Scrim Finder!",
-        description="I'm here to help you find scrims quickly and efficiently.",
+        title="🦍 Gorilla Tag Scrim Finder",
+        description="The ultimate tool for organizing competitive scrims across the community.",
         color=BLURPLE
     )
-    embed.add_field(name="Quick Start Guide:", value=f"""
-{separator_mint}
-- **Initiate**: Use `/findscrim` to start a new request.
-- **Broadcast**: Your request will be sent to all connected servers.
-- **Match**: Teams can instantly accept and join your scrim.
-- **Access**: Restricted to 'Admin' or 'Owner' roles for security.
-{separator_blurple}
-""", inline=False)
-    embed.add_field(name="Add the Bot:", value=f"""
-{separator_mint}
-- [Click here to add me to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot)
-{separator_blurple}
-""", inline=False)
-    embed.set_footer(text="created by frog360 and powered by Aurorasystem")
+    
+    embed.add_field(
+        name="🚀 How It Works",
+        value=f"{mint_line}• **`/findscrim`**: Create a request in seconds.\n• **Global Reach**: Your request hits every server instantly.\n• **Instant Match**: Teams join via the interactive broadcast.\n• **Secure**: Only authorized Admins/Owners can initiate.{blurple_line}",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔗 Expand Your Network",
+        value=f"{mint_line}[Click here to add the bot to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot){blurple_line}",
+        inline=False
+    )
+
+    embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
     
     try:
         await user.send(embed=embed)
