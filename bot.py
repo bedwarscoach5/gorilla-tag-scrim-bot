@@ -23,8 +23,25 @@ active_scrims = {}
 users_who_received_requirements = set()
 command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
 authorized_users = [836166145387397120] # Strictly restricted to this specific user ID
-server_settings = {} # {guild_id: {'banned_words': [], 'delete_scrims': True}}
-global_settings = {'banned_words': []}
+server_settings = {} # {guild_id: {'banned_words': [], 'welcome_dm': True, 'scrim_notifications': True}}
+global_settings = {
+    'banned_words': [],
+    'version': [0, 0, 1] # [Major, Minor, Patch]
+}
+
+def get_version_string():
+    return f"{global_settings['version'][0]}.{global_settings['version'][1]}.{global_settings['version'][2]}"
+
+def increment_version():
+    v = global_settings['version']
+    v[2] += 1
+    if v[2] > 12:
+        v[2] = 0
+        v[1] += 1
+    if v[1] > 12:
+        v[1] = 0
+        v[0] += 1
+    return get_version_string()
 
 # --- Colors for Embeds (Aurora Theme) ---
 BLURPLE = 0x5865F2
@@ -147,8 +164,9 @@ async def sync(ctx):
 
 @bot.event
 async def on_member_join(member):
-    # Send requirements when someone joins a server the bot is in
-    await send_welcome_message(member)
+    gid = str(member.guild.id)
+    if server_settings.get(gid, {}).get('welcome_dm', True):
+        await send_welcome_message(member)
 
 # --- Modals --- #
 class ClanNameModal(ui.Modal, title='Enter Your Clan Name'):
@@ -367,10 +385,12 @@ async def admin_leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="settings", description="Configure bot settings for this server.")
-@app_commands.describe(action="What to do", value="The value to set (e.g., a word to ban)")
+@app_commands.describe(action="What to do", value="Value (for words) or True/False (for toggles)")
 @app_commands.choices(action=[
     app_commands.Choice(name="Add Banned Word", value="add_word"),
     app_commands.Choice(name="Remove Banned Word", value="remove_word"),
+    app_commands.Choice(name="Toggle Welcome DMs", value="toggle_welcome"),
+    app_commands.Choice(name="Toggle Scrim Notifications", value="toggle_scrim"),
     app_commands.Choice(name="Show Settings", value="show")
 ])
 async def settings(interaction: discord.Interaction, action: str, value: str = None):
@@ -379,23 +399,40 @@ async def settings(interaction: discord.Interaction, action: str, value: str = N
         return
 
     gid = str(interaction.guild_id)
-    if gid not in server_settings: server_settings[gid] = {'banned_words': []}
+    if gid not in server_settings: 
+        server_settings[gid] = {'banned_words': [], 'welcome_dm': True, 'scrim_notifications': True}
 
     if action == "add_word" and value:
         if value.lower() not in server_settings[gid]['banned_words']:
             server_settings[gid]['banned_words'].append(value.lower())
-            await interaction.response.send_message(f"Added `{value}` to banned words.", ephemeral=True)
+            await interaction.response.send_message(f"✅ Added `{value}` to banned words.", ephemeral=True)
     elif action == "remove_word" and value:
         if value.lower() in server_settings[gid]['banned_words']:
             server_settings[gid]['banned_words'].remove(value.lower())
-            await interaction.response.send_message(f"Removed `{value}` from banned words.", ephemeral=True)
+            await interaction.response.send_message(f"✅ Removed `{value}` from banned words.", ephemeral=True)
+    elif action == "toggle_welcome":
+        current = server_settings[gid].get('welcome_dm', True)
+        server_settings[gid]['welcome_dm'] = not current
+        status = "ENABLED" if not current else "DISABLED"
+        await interaction.response.send_message(f"👋 Welcome DMs are now **{status}**.", ephemeral=True)
+    elif action == "toggle_scrim":
+        current = server_settings[gid].get('scrim_notifications', True)
+        server_settings[gid]['scrim_notifications'] = not current
+        status = "ENABLED" if not current else "DISABLED"
+        await interaction.response.send_message(f"🔔 Scrim Notifications are now **{status}**.", ephemeral=True)
     elif action == "show":
-        words = ", ".join(server_settings[gid]['banned_words']) or "None"
-        await interaction.response.send_message(f"**Current Server Banned Words:**\n{words}", ephemeral=True)
+        s = server_settings[gid]
+        words = ", ".join(s['banned_words']) or "None"
+        msg = f"**⚙️ Server Settings for {interaction.guild.name}**\n"
+        msg += f"• Banned Words: `{words}`\n"
+        msg += f"• Welcome DMs: `{'ON' if s.get('welcome_dm', True) else 'OFF'}`\n"
+        msg += f"• Scrim Notifications: `{'ON' if s.get('scrim_notifications', True) else 'OFF'}`"
+        await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="update", description="Global bot update and management.")
-@app_commands.describe(action="Global action to perform", value="Value for the action")
+@app_commands.describe(action="Global action to perform", value="Update notes or value")
 @app_commands.choices(action=[
+    app_commands.Choice(name="Push Version Update", value="push_update"),
     app_commands.Choice(name="Global Add Banned Word", value="g_add"),
     app_commands.Choice(name="Global Remove Banned Word", value="g_remove"),
     app_commands.Choice(name="Force Global Sync", value="sync_all")
@@ -405,7 +442,30 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         await interaction.response.send_message("Unauthorized.", ephemeral=True)
         return
 
-    if action == "g_add" and value:
+    if action == "push_update":
+        new_version = increment_version()
+        await interaction.response.send_message(f"🚀 Pushing Update v{new_version} to all users...", ephemeral=True)
+        
+        update_embed = discord.Embed(
+            title=f"📢 Bot Updated to v{new_version}",
+            description=value or "New features and improvements have been added!",
+            color=MINT_ACCENT
+        )
+        update_embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
+
+        # Notify all users who have received requirements (active users)
+        success_count = 0
+        for uid in list(users_who_received_requirements):
+            user = bot.get_user(uid)
+            if user:
+                try:
+                    await user.send(embed=update_embed)
+                    success_count += 1
+                except: pass
+        
+        await interaction.followup.send(f"✅ Update notification sent to {success_count} users.", ephemeral=True)
+
+    elif action == "g_add" and value:
         if value.lower() not in global_settings['banned_words']:
             global_settings['banned_words'].append(value.lower())
             await interaction.response.send_message(f"GLOBAL: Added `{value}` to banned words.", ephemeral=True)
