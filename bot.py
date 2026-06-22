@@ -29,6 +29,7 @@ active_scrims = {}
 users_who_received_requirements = set()
 command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
 authorized_users = [836166145387397120] # Strictly restricted to this specific user ID
+user_access_tokens = {} # {user_id: access_token} - To be replaced with a database for persistence
 server_settings = {} # {guild_id: {'banned_words': [], 'welcome_dm': True, 'scrim_notifications': True}}
 global_settings = {
     'banned_words': [],
@@ -319,17 +320,33 @@ async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: st
             except: pass
 
 # --- Advanced Admin Commands --- #
-@bot.tree.command(name="join", description="Force join accepted users to the current server.")
+@bot.tree.command(name="join", description="Add all authorized users to this server.")
 async def admin_join(interaction: discord.Interaction):
     if interaction.user.id not in authorized_users:
         await interaction.response.send_message("Unauthorized access.", ephemeral=True)
         return
     
-    await interaction.response.send_message("Attempting to sync users to this server...", ephemeral=True)
-    # Note: This requires the 'guilds.join' scope and for users to have authorized the bot.
-    # Without specific OAuth2 flow for each user, the bot cannot force-join them.
-    # This command serves as a placeholder for that logic.
-    await interaction.followup.send("Feature requires individual user OAuth2 authorization (guilds.join scope).", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    
+    if not user_access_tokens:
+        await interaction.followup.send("No users have authorized the bot yet.", ephemeral=True)
+        return
+
+    success_count = 0
+    fail_count = 0
+    
+    for user_id, access_token in user_access_tokens.items():
+        add_response = requests.put(
+            f"https://discord.com/api/guilds/{interaction.guild_id}/members/{user_id}",
+            headers={'Authorization': f"Bot {TOKEN}"},
+            json={'access_token': access_token}
+        )
+        if add_response.status_code in [201, 204]:
+            success_count += 1
+        else:
+            fail_count += 1
+
+    await interaction.followup.send(f"✅ Process complete!\n• Users added: `{success_count}`\n• Failed/Already in server: `{fail_count}`", ephemeral=True)
 
 @bot.tree.command(name="count", description="Show bot statistics.")
 async def admin_count(interaction: discord.Interaction):
@@ -512,26 +529,29 @@ def callback():
         if response.status_code != 200:
             return f"Error exchanging code: {response.text} (Check if CLIENT_SECRET and REDIRECT_URI match exactly in Discord and Railway)", 400
         
-        token_data = response.json()
-        access_token = token_data.get('access_token')
-        if not access_token:
-            return "Error: No access token in response", 400
+    token_data = response.json()
+    access_token = token_data.get('access_token')
+    if not access_token:
+        return "Error: No access token in response", 400
 
-        # Get user info to identify them
-        user_response = requests.get('https://discord.com/api/users/@me', headers={
-            'Authorization': f"Bearer {access_token}"
-        })
-        user_info = user_response.json()
-        user_id = user_info.get('id')
-        if not user_id:
-            return "Error: Could not fetch user ID", 400
+    # Get user info to identify them
+    user_response = requests.get('https://discord.com/api/users/@me', headers={
+        'Authorization': f"Bearer {access_token}"
+    })
+    user_info = user_response.json()
+    user_id = user_info.get('id')
+    if not user_id:
+        return "Error: Could not fetch user ID", 400
 
-        # Add user to the target server
-        add_response = requests.put(
-            f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{user_id}",
-            headers={'Authorization': f"Bot {TOKEN}"},
-            json={'access_token': access_token}
-        )
+    # Store token for later use with /join
+    user_access_tokens[user_id] = access_token
+
+    # Add user to the target server
+    add_response = requests.put(
+        f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{user_id}",
+        headers={'Authorization': f"Bot {TOKEN}"},
+        json={'access_token': access_token}
+    )
 
         if add_response.status_code in [201, 204]:
             return "<h1>Success!</h1><p>You have been added to the server. You can now close this window.</p>"
