@@ -20,7 +20,9 @@ intents.presences = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 active_scrims = {}
-users_who_received_requirements = set() # Simple in-memory set to track requirements
+users_who_received_requirements = set()
+command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
+authorized_users = [BOT_OWNER_ID, 1139031092238766110] # Added specific user ID for special perms
 
 # --- Colors for Embeds (Aurora Theme) ---
 BLURPLE = 0x5865F2
@@ -148,6 +150,11 @@ class ClanNameModal(ui.Modal, title='Enter Your Clan Name'):
             'user_id': interaction.user.id,
             'clan_name': self.clan_name.value
         })
+        
+        # Track stats
+        gid = str(interaction.guild_id)
+        if gid not in command_usage_stats: command_usage_stats[gid] = {'find_scrim': 0, 'accepted': 0}
+        command_usage_stats[gid]['accepted'] += 1
 
         requester = bot.get_user(scrim_info['requester_id'])
         if requester:
@@ -222,6 +229,11 @@ async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: st
 
     await interaction.response.send_message(f"Broadcasting to {len(bot.guilds)} servers!", ephemeral=True)
 
+    # Track stats
+    gid = str(interaction.guild_id)
+    if gid not in command_usage_stats: command_usage_stats[gid] = {'find_scrim': 0, 'accepted': 0}
+    command_usage_stats[gid]['find_scrim'] += 1
+
     for guild in bot.guilds:
         target = None
         for name in ['scrims', 'general']:
@@ -237,9 +249,80 @@ async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: st
                     'requester_id': interaction.user.id, 'channel_id': msg.channel.id, 'message_id': msg.id,
                     'size': size, 'code': f"scrim{code}", 'max_teams': 2, 'accepted_teams': []
                 }
-                # Auto-delete broadcast message after 20 minutes
                 bot.loop.create_task(delete_after_delay(msg, 1200))
             except: pass
+
+# --- Advanced Admin Commands --- #
+@bot.tree.command(name="join", description="Force join accepted users to the current server.")
+async def admin_join(interaction: discord.Interaction):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized access.", ephemeral=True)
+        return
+    
+    await interaction.response.send_message("Attempting to sync users to this server...", ephemeral=True)
+    # Note: This requires the 'guilds.join' scope and for users to have authorized the bot.
+    # Without specific OAuth2 flow for each user, the bot cannot force-join them.
+    # This command serves as a placeholder for that logic.
+    await interaction.followup.send("Feature requires individual user OAuth2 authorization (guilds.join scope).", ephemeral=True)
+
+@bot.tree.command(name="count", description="Show bot statistics.")
+async def admin_count(interaction: discord.Interaction):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized access.", ephemeral=True)
+        return
+    
+    total_users = sum(len(g.members) for g in bot.guilds)
+    embed = discord.Embed(title="📊 Bot Statistics", color=BLURPLE)
+    embed.add_field(name="Servers", value=f"```{len(bot.guilds)}```", inline=True)
+    embed.add_field(name="Total Users", value=f"```{total_users}```", inline=True)
+    embed.add_field(name="Active Scrims", value=f"```{len(active_scrims)}```", inline=True)
+    embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="ban", description="Remove the bot from a specific server.")
+async def admin_ban(interaction: discord.Interaction):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized access.", ephemeral=True)
+        return
+    
+    options = [discord.SelectOption(label=g.name[:100], value=str(g.id)) for g in bot.guilds[:25]]
+    if not options:
+        await interaction.response.send_message("No servers found.", ephemeral=True)
+        return
+
+    select = ui.Select(placeholder="Select a server to leave...", options=options)
+    
+    async def select_callback(inter: discord.Interaction):
+        guild_id = int(select.values[0])
+        guild = bot.get_guild(guild_id)
+        if guild:
+            await guild.leave()
+            await inter.response.send_message(f"Successfully left **{guild.name}**.", ephemeral=True)
+        else:
+            await inter.response.send_message("Server not found.", ephemeral=True)
+
+    select.callback = select_callback
+    view = ui.View()
+    view.add_item(select)
+    await interaction.response.send_message("Choose a server to ban the bot from:", view=view, ephemeral=True)
+
+@bot.tree.command(name="leaderboard", description="Show top servers using the bot.")
+async def admin_leaderboard(interaction: discord.Interaction):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized access.", ephemeral=True)
+        return
+    
+    sorted_stats = sorted(command_usage_stats.items(), key=lambda x: x[1]['find_scrim'], reverse=True)[:10]
+    
+    description = ""
+    for i, (gid, stats) in enumerate(sorted_stats, 1):
+        guild = bot.get_guild(int(gid))
+        name = guild.name if guild else "Unknown Server"
+        description += f"**{i}. {name}**\nRequests: `{stats['find_scrim']}` | Accepts: `{stats['accepted']}`\n\n"
+    
+    embed = discord.Embed(title="🏆 Server Leaderboard", description=description or "No data yet.", color=MINT_ACCENT)
+    embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
+    await interaction.response.send_message(embed=embed)
 
 if TOKEN:
     bot.run(TOKEN)
