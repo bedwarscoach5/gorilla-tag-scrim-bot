@@ -54,19 +54,17 @@ async def send_welcome_message(user: discord.User):
         description="I'm here to help you find scrims quickly and efficiently.",
         color=BLURPLE
     )
-    embed.add_field(name="How to use me:", value=f"""
+    embed.add_field(name="Quick Start Guide:", value=f"""
 {separator_mint}
-- Use `/findscrim` to initiate a scrim request.
-- I will broadcast your request to all servers I'm in.
-- Teams can then accept your scrim request.
-- Only users with 'Admin' or 'Owner' roles (or server owner) can use `/findscrim`.
-- [click me to add me to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot)
+- **Initiate**: Use `/findscrim` to start a new request.
+- **Broadcast**: Your request will be sent to all connected servers.
+- **Match**: Teams can instantly accept and join your scrim.
+- **Access**: Restricted to 'Admin' or 'Owner' roles for security.
 {separator_blurple}
 """, inline=False)
-    embed.add_field(name="Important:", value=f"""
+    embed.add_field(name="Add the Bot:", value=f"""
 {separator_mint}
-- Make sure to set up your Discord Developer Portal settings correctly (Intents, Scopes, Permissions).
-- Ensure your `DISCORD_BOT_TOKEN` and `BOT_OWNER_ID` are set in Railway environment variables.
+- [Click here to add me to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot)
 {separator_blurple}
 """, inline=False)
     embed.set_footer(text="created by frog360 and powered by Aurorasystem")
