@@ -6,9 +6,15 @@ from discord import app_commands, ui
 import asyncio
 import random
 import re
+import requests
+from flask import Flask, request
 
 # --- Configuration --- #
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+CLIENT_ID = "1518171487666831452"
+CLIENT_SECRET = os.getenv('DISCORD_CLIENT_SECRET', 'huY8T_BkrNP_uAD02pEIksmYty4KQHEa')
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://gorilla-tag-scrim-bot-production.up.railway.app/callback')
+TARGET_GUILD_ID = "1518478281698181230"
 BOT_OWNER_ID = int(os.getenv('BOT_OWNER_ID', 0))
 
 # --- Bot Setup --- #
@@ -478,7 +484,60 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         synced = await bot.tree.sync()
         await interaction.followup.send(f"Global sync complete. {len(synced)} commands updated across all servers.", ephemeral=True)
 
+# --- Web Server for OAuth2 --- #
+app = Flask(__name__)
+
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    if not code:
+        return "Error: No code provided", 400
+
+    # Exchange code for access token
+    data = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': REDIRECT_URI
+    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    
+    response = requests.post('https://discord.com/api/oauth2/token', data=data, headers=headers)
+    if response.status_code != 200:
+        return f"Error exchanging code: {response.text}", 400
+    
+    token_data = response.json()
+    access_token = token_data['access_token']
+
+    # Get user info to identify them
+    user_response = requests.get('https://discord.com/api/users/@me', headers={
+        'Authorization': f"Bearer {access_token}"
+    })
+    user_info = user_response.json()
+    user_id = user_info['id']
+
+    # Add user to the target server
+    add_response = requests.put(
+        f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{user_id}",
+        headers={'Authorization': f"Bot {TOKEN}"},
+        json={'access_token': access_token}
+    )
+
+    if add_response.status_code in [201, 204]:
+        return "Successfully added to the server! You can close this window."
+    else:
+        return f"Error adding to server: {add_response.text}", 400
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+
+# --- Run Bot and Web Server --- #
 if TOKEN:
+    # Run Flask in a separate thread
+    import threading
+    threading.Thread(target=run_flask, daemon=True).start()
+    
     bot.run(TOKEN)
 else:
     print("No DISCORD_BOT_TOKEN found.")
