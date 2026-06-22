@@ -13,7 +13,7 @@ from flask import Flask, request
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 CLIENT_ID = "1518171487666831452"
 CLIENT_SECRET = os.getenv('DISCORD_CLIENT_SECRET', 'huY8T_BkrNP_uAD02pEIksmYty4KQHEa')
-REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://gorilla-tag-scrim-bot-production.up.railway.app/callback')
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://web-production-089e6.up.railway.app/callback')
 TARGET_GUILD_ID = "1518478281698181230"
 BOT_OWNER_ID = int(os.getenv('BOT_OWNER_ID', 0))
 
