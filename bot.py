@@ -166,7 +166,7 @@ class ClanNameModal(ui.Modal, title='Enter Your Clan Name'):
                 pass
 
         await self.update_scrim_message(scrim_info)
-        await interaction.followup.send(f"You have accepted the scrim! Requester has been notified.", ephemeral=True)
+        await interaction.followup.send(f"You have accepted the scrim! Requester has been notified.\n\n**Join Code:** ||***{scrim_info['code']}***||", ephemeral=True)
 
     async def update_scrim_message(self, scrim_info):
         channel = bot.get_channel(scrim_info['channel_id'])
