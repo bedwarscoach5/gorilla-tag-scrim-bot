@@ -100,8 +100,23 @@ async def delete_after_delay(message: discord.Message, delay: int):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id})')
-    await bot.tree.sync()
-    print('Slash commands synced.')
+    # Syncing globally on every startup can sometimes be slow or hit rate limits
+    # It's often better to sync manually or on a specific trigger
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s) globally.")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
+
+@bot.command()
+@commands.is_owner()
+async def sync(ctx):
+    """Manually sync slash commands (Owner only)"""
+    try:
+        synced = await bot.tree.sync()
+        await ctx.send(f"Successfully synced {len(synced)} slash commands globally!")
+    except Exception as e:
+        await ctx.send(f"Error syncing: {e}")
 
 @bot.event
 async def on_member_join(member):
