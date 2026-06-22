@@ -98,7 +98,7 @@ async def send_welcome_message(user: discord.User):
     
     embed.add_field(
         name="🔗 Expand Your Network",
-        value=f"{mint_line}[Click here to add the bot to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot){blurple_line}",
+        value=f"{mint_line}[Click here to add the bot to your clan!](https://discord.com/oauth2/authorize?client_id=1518171487666831452&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri=https%3A%2F%2Fweb-production-089e6.up.railway.app%2Fcallback&response_type=code){blurple_line}",
         inline=False
     )
 
