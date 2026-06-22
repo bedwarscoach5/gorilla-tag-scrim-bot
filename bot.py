@@ -454,9 +454,10 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         
         update_embed = discord.Embed(
             title=f"📢 Bot Updated to v{new_version}",
-            description=value or "New features and improvements have been added!",
+            description=value or f"The bot has been updated to the latest version. Please use `/findscrim` to see the new features!",
             color=MINT_ACCENT
         )
+        update_embed.add_field(name="Current Version", value=f"`{new_version}`", inline=True)
         update_embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
 
         # Notify all users who have received requirements (active users)
@@ -469,7 +470,10 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
                     success_count += 1
                 except: pass
         
-        await interaction.followup.send(f"✅ Update notification sent to {success_count} users.", ephemeral=True)
+        # Force a sync for the current instance as part of the update
+        await bot.tree.sync()
+        
+        await interaction.followup.send(f"✅ Update notification sent to {success_count} users and commands synced.", ephemeral=True)
 
     elif action == "g_add" and value:
         if value.lower() not in global_settings['banned_words']:
@@ -494,40 +498,47 @@ def callback():
         return "Error: No code provided", 400
 
     # Exchange code for access token
-    data = {
-        'client_id': CLIENT_ID,
-        'client_secret': CLIENT_SECRET,
-        'grant_type': 'authorization_code',
-        'code': code,
-        'redirect_uri': REDIRECT_URI
-    }
-    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    
-    response = requests.post('https://discord.com/api/oauth2/token', data=data, headers=headers)
-    if response.status_code != 200:
-        return f"Error exchanging code: {response.text}", 400
-    
-    token_data = response.json()
-    access_token = token_data['access_token']
+    try:
+        data = {
+            'client_id': CLIENT_ID,
+            'client_secret': CLIENT_SECRET,
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': REDIRECT_URI
+        }
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        
+        response = requests.post('https://discord.com/api/oauth2/token', data=data, headers=headers)
+        if response.status_code != 200:
+            return f"Error exchanging code: {response.text} (Check if CLIENT_SECRET and REDIRECT_URI match exactly in Discord and Railway)", 400
+        
+        token_data = response.json()
+        access_token = token_data.get('access_token')
+        if not access_token:
+            return "Error: No access token in response", 400
 
-    # Get user info to identify them
-    user_response = requests.get('https://discord.com/api/users/@me', headers={
-        'Authorization': f"Bearer {access_token}"
-    })
-    user_info = user_response.json()
-    user_id = user_info['id']
+        # Get user info to identify them
+        user_response = requests.get('https://discord.com/api/users/@me', headers={
+            'Authorization': f"Bearer {access_token}"
+        })
+        user_info = user_response.json()
+        user_id = user_info.get('id')
+        if not user_id:
+            return "Error: Could not fetch user ID", 400
 
-    # Add user to the target server
-    add_response = requests.put(
-        f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{user_id}",
-        headers={'Authorization': f"Bot {TOKEN}"},
-        json={'access_token': access_token}
-    )
+        # Add user to the target server
+        add_response = requests.put(
+            f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{user_id}",
+            headers={'Authorization': f"Bot {TOKEN}"},
+            json={'access_token': access_token}
+        )
 
-    if add_response.status_code in [201, 204]:
-        return "Successfully added to the server! You can close this window."
-    else:
-        return f"Error adding to server: {add_response.text}", 400
+        if add_response.status_code in [201, 204]:
+            return "<h1>Success!</h1><p>You have been added to the server. You can now close this window.</p>"
+        else:
+            return f"<h1>Notice</h1><p>You might already be in the server, or there was a minor issue: {add_response.text}</p>", 200
+    except Exception as e:
+        return f"<h1>Internal Error</h1><p>{str(e)}</p>", 500
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
