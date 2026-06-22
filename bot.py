@@ -44,6 +44,14 @@ def contains_profanity(text):
 
 # --- Utility Functions ---
 async def send_welcome_message(user: discord.User):
+    # First, clean up any previous messages from the bot to this user
+    try:
+        async for message in user.history(limit=20):
+            if message.author == bot.user:
+                await message.delete()
+    except Exception as e:
+        print(f"Error cleaning history for {user.name}: {e}")
+
     if user.id in users_who_received_requirements:
         return
 
