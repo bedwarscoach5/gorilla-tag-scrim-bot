@@ -23,6 +23,8 @@ active_scrims = {}
 users_who_received_requirements = set()
 command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
 authorized_users = [836166145387397120] # Strictly restricted to this specific user ID
+server_settings = {} # {guild_id: {'banned_words': [], 'delete_scrims': True}}
+global_settings = {'banned_words': []}
 
 # --- Colors for Embeds (Aurora Theme) ---
 BLURPLE = 0x5865F2
@@ -108,13 +110,30 @@ async def delete_after_delay(message: discord.Message, delay: int):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name} ({bot.user.id})')
-    # Syncing globally on every startup can sometimes be slow or hit rate limits
-    # It's often better to sync manually or on a specific trigger
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s) globally.")
     except Exception as e:
         print(f"Error syncing commands: {e}")
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    # Check for banned words (Local and Global)
+    gid = str(message.guild.id) if message.guild else None
+    local_banned = server_settings.get(gid, {}).get('banned_words', []) if gid else []
+    all_banned = global_settings['banned_words'] + local_banned
+
+    if any(word.lower() in message.content.lower() for word in all_banned):
+        try:
+            await message.delete()
+            await message.channel.send(f"{message.author.mention}, your message contained a restricted word.", delete_after=5)
+        except:
+            pass
+
+    await bot.process_commands(message)
 
 @bot.command()
 @commands.is_owner()
@@ -346,6 +365,58 @@ async def admin_leaderboard(interaction: discord.Interaction):
     embed = discord.Embed(title="🏆 Server Leaderboard", description=description or "No data yet.", color=MINT_ACCENT)
     embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="settings", description="Configure bot settings for this server.")
+@app_commands.describe(action="What to do", value="The value to set (e.g., a word to ban)")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Add Banned Word", value="add_word"),
+    app_commands.Choice(name="Remove Banned Word", value="remove_word"),
+    app_commands.Choice(name="Show Settings", value="show")
+])
+async def settings(interaction: discord.Interaction, action: str, value: str = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Only administrators can change settings.", ephemeral=True)
+        return
+
+    gid = str(interaction.guild_id)
+    if gid not in server_settings: server_settings[gid] = {'banned_words': []}
+
+    if action == "add_word" and value:
+        if value.lower() not in server_settings[gid]['banned_words']:
+            server_settings[gid]['banned_words'].append(value.lower())
+            await interaction.response.send_message(f"Added `{value}` to banned words.", ephemeral=True)
+    elif action == "remove_word" and value:
+        if value.lower() in server_settings[gid]['banned_words']:
+            server_settings[gid]['banned_words'].remove(value.lower())
+            await interaction.response.send_message(f"Removed `{value}` from banned words.", ephemeral=True)
+    elif action == "show":
+        words = ", ".join(server_settings[gid]['banned_words']) or "None"
+        await interaction.response.send_message(f"**Current Server Banned Words:**\n{words}", ephemeral=True)
+
+@bot.tree.command(name="update", description="Global bot update and management.")
+@app_commands.describe(action="Global action to perform", value="Value for the action")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Global Add Banned Word", value="g_add"),
+    app_commands.Choice(name="Global Remove Banned Word", value="g_remove"),
+    app_commands.Choice(name="Force Global Sync", value="sync_all")
+])
+async def global_update(interaction: discord.Interaction, action: str, value: str = None):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized.", ephemeral=True)
+        return
+
+    if action == "g_add" and value:
+        if value.lower() not in global_settings['banned_words']:
+            global_settings['banned_words'].append(value.lower())
+            await interaction.response.send_message(f"GLOBAL: Added `{value}` to banned words.", ephemeral=True)
+    elif action == "g_remove" and value:
+        if value.lower() in global_settings['banned_words']:
+            global_settings['banned_words'].remove(value.lower())
+            await interaction.response.send_message(f"GLOBAL: Removed `{value}` from banned words.", ephemeral=True)
+    elif action == "sync_all":
+        await interaction.response.defer(ephemeral=True)
+        synced = await bot.tree.sync()
+        await interaction.followup.send(f"Global sync complete. {len(synced)} commands updated across all servers.", ephemeral=True)
 
 if TOKEN:
     bot.run(TOKEN)
