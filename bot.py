@@ -22,7 +22,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 active_scrims = {}
 users_who_received_requirements = set()
 command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
-authorized_users = [BOT_OWNER_ID, 836166145387397120] # Authorized user IDs for admin commands
+authorized_users = [836166145387397120] # Strictly restricted to this specific user ID
 
 # --- Colors for Embeds (Aurora Theme) ---
 BLURPLE = 0x5865F2
