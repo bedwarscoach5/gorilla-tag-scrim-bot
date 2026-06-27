@@ -1,4 +1,5 @@
-discord.py[interactions]
+discord.py
 Flask
 requests
-
+gunicorn
+python-dotenv
