@@ -26,6 +26,33 @@ REDIRECT_URI   = os.getenv('REDIRECT_URI', 'https://web-production-089e6.up.rail
 TARGET_GUILD_ID = "1518478281698181230"
 BOT_OWNER_ID   = int(os.getenv('BOT_OWNER_ID', 836166145387397120))
 
+# ─── Memory System (core-memory) ─────────────────────────────────────────────
+MEMORY_DIR = "core-memory"
+TOS_ACCEPTED_FILE = os.path.join(MEMORY_DIR, "tos_accepted.txt")
+
+if not os.path.exists(MEMORY_DIR):
+    os.makedirs(MEMORY_DIR)
+
+def record_tos_acceptance(user: discord.User):
+    """Save user to core-memory as @username"""
+    try:
+        with open(TOS_ACCEPTED_FILE, "a") as f:
+            f.write(f"@{user.name}\n")
+    except Exception as e:
+        log.error(f"Failed to record TOS acceptance: {e}")
+
+def has_accepted_tos_in_memory(user_name: str) -> bool:
+    """Check if @username exists in core-memory"""
+    if not os.path.exists(TOS_ACCEPTED_FILE):
+        return False
+    try:
+        with open(TOS_ACCEPTED_FILE, "r") as f:
+            accepted_users = f.read().splitlines()
+            return f"@{user_name}" in accepted_users
+    except Exception as e:
+        log.error(f"Failed to read TOS memory: {e}")
+        return False
+
 # ─── Bot Setup ───────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
@@ -76,7 +103,7 @@ global_settings: dict = db['global_settings']
 def get_user_data(user_id):
     uid = str(user_id)
     if uid not in db['users']:
-        db['users'][uid] = {'verified': False, 'wins': 0, 'losses': 0, 'token': None}
+        db['users'][uid] = {'verified': False, 'wins': 0, 'losses': 0, 'token': None, 'accepted_tos': False}
         save_db(db)
     return db['users'][uid]
 
@@ -214,12 +241,11 @@ async def on_ready():
     except Exception as e:
         log.error(f"Error syncing commands globally: {e}")
 
-    # Clear Guild-Specific Sync to prevent duplicates
+    # Clear Guild-Specific Sync
     try:
         target_guild = discord.Object(id=int(TARGET_GUILD_ID))
         bot.tree.clear_commands(guild=target_guild)
         await bot.tree.sync(guild=target_guild)
-        log.info(f"Cleared guild-specific commands for {TARGET_GUILD_ID} to prevent duplicates.")
     except Exception as e:
         log.error(f"Error clearing target guild commands: {e}")
 
@@ -242,7 +268,7 @@ async def on_member_join(member: discord.Member):
                 except: pass
         
         user_data = get_user_data(member.id)
-        if not user_data['verified']:
+        if not user_data['verified'] or not has_accepted_tos_in_memory(member.name):
             await member.add_roles(unverified_role)
     except Exception as e:
         log.error(f"Error handling join roles in {member.guild.name}: {e}")
@@ -287,6 +313,34 @@ async def sync(ctx):
 async def cleanup_old_scrims():
     pass
 
+# ─── TOS View & Logic ────────────────────────────────────────────────────────
+class TOSView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="Accept TOS", style=discord.ButtonStyle.success, emoji="✅", custom_id="accept_tos_btn")
+    async def accept_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 1. Update Database
+        update_user_data(interaction.user.id, accepted_tos=True)
+        
+        # 2. Update Core Memory
+        if not has_accepted_tos_in_memory(interaction.user.name):
+            record_tos_acceptance(interaction.user)
+        
+        # 3. Remove Unverified role in all servers
+        removed_count = 0
+        for guild in bot.guilds:
+            member = guild.get_member(interaction.user.id)
+            if member:
+                role = discord.utils.get(guild.roles, name="Unverified")
+                if role:
+                    try:
+                        await member.remove_roles(role)
+                        removed_count += 1
+                    except: pass
+        
+        await interaction.response.send_message("✅ You have accepted the Terms of Service! You can now use all bot features.", ephemeral=True)
+
 # ─── Modal ───────────────────────────────────────────────────────────────────
 class ClanNameModal(ui.Modal, title='🦍  Enter Your Clan Name'):
     clan_name = ui.TextInput(
@@ -303,6 +357,12 @@ class ClanNameModal(ui.Modal, title='🦍  Enter Your Clan Name'):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        # TOS Check (Memory + DB)
+        if not has_accepted_tos_in_memory(interaction.user.name):
+            await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-TOS channel before joining scrims.", ephemeral=True)
+            return
+
         name = self.clan_name.value.strip()
         if contains_profanity(name):
             await interaction.followup.send("❌ Please use a respectful clan name.", ephemeral=True)
@@ -354,6 +414,12 @@ class ScrimView(ui.View):
         if not scrim_info:
             await interaction.response.send_message("❌ This scrim is no longer active.", ephemeral=True)
             return
+        
+        # TOS Check
+        if not has_accepted_tos_in_memory(interaction.user.name):
+            await interaction.response.send_message("❌ You must accept the Terms of Service in the #scrim-TOS channel before joining scrims.", ephemeral=True)
+            return
+
         if len(scrim_info['accepted_teams']) >= scrim_info['max_teams']:
             await interaction.response.send_message("❌ This scrim is already full!", ephemeral=True)
             return
@@ -425,7 +491,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(name="🛡️ Admin & Owner", value=(
         "• **/bot_stats** — View global bot statistics (Owner only).\n"
-        "• **/force_verify** — Manually verify a user by ID (Owner only).\n"
+        "• **/force_verify** — Globally deploy #scrim-TOS channels (Owner only).\n"
         "• **/join** — Force join verified users to a server (Owner only).\n"
         "• **/banbot** — Make the bot leave a server (Owner only).\n"
         "• **/update** — Push global updates and sync commands (Owner only)."
@@ -450,6 +516,12 @@ async def ping(interaction: discord.Interaction):
 ])
 async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: str, code: str, team_name: str):
     await interaction.response.defer(ephemeral=True)
+    
+    # TOS Check
+    if not has_accepted_tos_in_memory(interaction.user.name):
+        await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-TOS channel before broadcasting scrims.", ephemeral=True)
+        return
+
     is_admin = (
         interaction.user.guild_permissions.administrator
         or interaction.user.id == interaction.guild.owner_id
@@ -584,75 +656,63 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         if value.lower() not in global_settings['banned_words']: global_settings['banned_words'].append(value.lower())
         save_db(db); await interaction.followup.send(f"Global Ban: `{value}`.", ephemeral=True)
 
-# ─── Restored & Enhanced Commands ─────────────────────────────────────────────
+# ─── Enhanced Commands ────────────────────────────────────────────────────────
 @bot.tree.command(name="verify", description="🛡️ Setup a dedicated verification channel.")
 async def verify(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    
-    # Permission Check
     if not interaction.user.guild_permissions.manage_channels:
-        await interaction.followup.send("❌ You need 'Manage Channels' permission to use this.", ephemeral=True)
+        await interaction.followup.send("❌ You need 'Manage Channels' permission.", ephemeral=True)
         return
-
-    # Create Channel
     try:
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(send_messages=False),
             interaction.guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)
         }
         channel = await interaction.guild.create_text_channel('verify-bot', overwrites=overwrites, topic="Verification for Scrim Finder")
-        
         verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
-        
-        embed = base_embed(
-            title="🦍  Verification Prompt",
-            description=(
-                "Welcome to the Scrim Finder! To access competitive scrims and global features, you must verify your account.\n\n"
-                "**Why verify?**\n"
-                "✅  Join scrims instantly\n"
-                "✅  Track your competitive stats\n"
-                "✅  Access global tournaments\n\n"
-                "Click the button below to start!"
-            ),
-            color=MINT_ACCENT
-        )
+        embed = base_embed("🦍  Verification Prompt", "Welcome! To access competitive scrims and global features, you must verify your account.\n\n**Why verify?**\n✅  Join scrims instantly\n✅  Track your stats\n✅  Global tournaments\n\nClick below to start!", MINT_ACCENT)
         embed.set_image(url="https://i.imgur.com/your_aurora_banner.gif")
-        
-        view = ui.View()
-        view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link, emoji="🛡️"))
-        
+        view = ui.View(); view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link, emoji="🛡️"))
         await channel.send(embed=embed, view=view)
         await interaction.followup.send(f"✅ Verification channel created: {channel.mention}", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Failed to create channel: {e}", ephemeral=True)
+    except Exception as e: await interaction.followup.send(f"❌ Failed: {e}", ephemeral=True)
 
-@bot.tree.command(name="force_verify", description="🔒 Admin: Globally verify a user by ID.")
-@app_commands.describe(user_id="The Discord ID of the user to verify")
-async def force_verify(interaction: discord.Interaction, user_id: str):
+@bot.tree.command(name="force_verify", description="🔒 Admin: Globally deploy #scrim-TOS channels and acceptance prompts.")
+async def force_verify(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     if interaction.user.id not in authorized_users:
         await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
         return
     
-    try:
-        uid_int = int(user_id)
-        update_user_data(uid_int, verified=True)
-        
-        # Remote Role Removal across all servers
-        removed_count = 0
-        for guild in bot.guilds:
-            member = guild.get_member(uid_int)
-            if member:
-                role = discord.utils.get(guild.roles, name="Unverified")
-                if role:
-                    try:
-                        await member.remove_roles(role)
-                        removed_count += 1
-                    except: pass
-        
-        await interaction.followup.send(f"✅ Successfully verified **{user_id}** globally and removed 'Unverified' role in {removed_count} servers.", ephemeral=True)
-    except ValueError:
-        await interaction.followup.send("❌ Invalid User ID.", ephemeral=True)
+    await interaction.followup.send(f"⏳ Deploying #scrim-TOS to {len(bot.guilds)} servers...", ephemeral=True)
+    success_count = 0
+    for guild in bot.guilds:
+        try:
+            channel = discord.utils.get(guild.text_channels, name="scrim-tos")
+            if not channel:
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(send_messages=False),
+                    guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)
+                }
+                channel = await guild.create_text_channel('scrim-tos', overwrites=overwrites, topic="Terms of Service for Scrim Finder")
+            
+            embed = base_embed(
+                title="📜  Terms of Service",
+                description=(
+                    "By using the Scrim Finder bot, you agree to the following:\n\n"
+                    "1️⃣  **Respect**: No slurs, toxicity, or harassment.\n"
+                    "2️⃣  **Fair Play**: No cheating, glitching, or modding during scrims.\n"
+                    "3️⃣  **Integrity**: Do not leak scrim codes to unauthorized players.\n\n"
+                    "Click the button below to accept and continue using the bot!"
+                ),
+                color=GOLD
+            )
+            embed.set_image(url="https://i.imgur.com/your_aurora_banner.gif")
+            await channel.send(embed=embed, view=TOSView())
+            success_count += 1
+        except: pass
+    
+    await interaction.followup.send(f"✅ Successfully deployed #scrim-TOS to {success_count}/{len(bot.guilds)} servers.", ephemeral=True)
 
 @bot.tree.command(name="bot_stats", description="📊 Admin: Show detailed bot statistics.")
 async def bot_stats(interaction: discord.Interaction):
@@ -675,20 +735,17 @@ async def admin_join(interaction: discord.Interaction):
     if interaction.user.id not in authorized_users:
         await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
         return
-    
     verified_users = [uid for uid, data in db['users'].items() if data.get('verified') and data.get('token')]
     if not verified_users:
-        await interaction.followup.send("❌ No verified users with active tokens found.", ephemeral=True)
+        await interaction.followup.send("❌ No verified users found.", ephemeral=True)
         return
-
-    await interaction.followup.send(f"⏳ Attempting to join {len(verified_users)} users...", ephemeral=True)
+    await interaction.followup.send(f"⏳ Joining {len(verified_users)} users...", ephemeral=True)
     success = 0
     for uid in verified_users:
         token = db['users'][uid]['token']
         res = requests.put(f"https://discord.com/api/guilds/{interaction.guild_id}/members/{uid}", headers={'Authorization': f"Bot {TOKEN}"}, json={'access_token': token}, timeout=10)
         if res.status_code in [201, 204]: success += 1
-    
-    await interaction.followup.send(f"✅ Successfully joined {success}/{len(verified_users)} users.", ephemeral=True)
+    await interaction.followup.send(f"✅ Joined {success}/{len(verified_users)} users.", ephemeral=True)
 
 # ─── Web Server ──────────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
