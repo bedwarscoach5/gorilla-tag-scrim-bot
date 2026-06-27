@@ -205,18 +205,17 @@ async def delete_after_delay(message: discord.Message, delay: int):
 @bot.event
 async def on_ready():
     log.info(f"Logged in as {bot.user} ({bot.user.id})")
+    # Commands are synced globally on startup
     try:
         synced = await bot.tree.sync()
-        log.info(f"Synced {len(synced)} command(s) globally.")
+        log.info(f"Successfully synced {len(synced)} slash commands globally.")
     except Exception as e:
-        log.error(f"Error syncing commands: {e}")
+        log.error(f"Error syncing commands on startup: {e}")
     cleanup_old_scrims.start()
 
 @bot.event
 async def on_member_join(member: discord.Member):
     gid = str(member.guild.id)
-    
-    # 1. Automatic "Unverified" Role Management
     try:
         unverified_role = discord.utils.get(member.guild.roles, name="Unverified")
         if not unverified_role:
@@ -236,7 +235,6 @@ async def on_member_join(member: discord.Member):
     except Exception as e:
         log.error(f"Error handling join roles in {member.guild.name}: {e}")
 
-    # 2. Welcome DM
     if get_server_settings(gid).get('welcome_dm', True):
         await send_welcome_message(member)
 
@@ -292,6 +290,7 @@ class ClanNameModal(ui.Modal, title='🦍  Enter Your Clan Name'):
         self.scrim_id = scrim_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Interaction deferral to prevent "Application did not respond"
         await interaction.response.defer(ephemeral=True)
 
         name = self.clan_name.value.strip()
@@ -368,6 +367,7 @@ class ScrimView(ui.View):
         if len(scrim_info['accepted_teams']) >= scrim_info['max_teams']:
             await interaction.response.send_message("❌ This scrim is already full!", ephemeral=True)
             return
+        # Modal handles its own deferral
         await interaction.response.send_modal(ClanNameModal(self.scrim_id))
 
     async def on_timeout(self):
@@ -480,8 +480,11 @@ async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: st
     app_commands.Choice(name="📋 Show Settings", value="show")
 ])
 async def settings(interaction: discord.Interaction, action: str, value: str = None):
+    # Immediate deferral to prevent timeout
+    await interaction.response.defer(ephemeral=True)
+    
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(embed=base_embed("🚫 Denied", "Admin only.", ERROR_RED), ephemeral=True)
+        await interaction.followup.send(embed=base_embed("🚫 Denied", "Admin only.", ERROR_RED), ephemeral=True)
         return
 
     gid = str(interaction.guild_id)
@@ -491,29 +494,32 @@ async def settings(interaction: discord.Interaction, action: str, value: str = N
         word = value.lower().strip()
         if word not in s['banned_words']: s['banned_words'].append(word)
         save_db(db)
-        await interaction.response.send_message(embed=base_embed("✅ Added", f"Banned `{word}`.", SUCCESS_GREEN), ephemeral=True)
+        await interaction.followup.send(embed=base_embed("✅ Added", f"Banned `{word}`.", SUCCESS_GREEN), ephemeral=True)
     elif action == "remove_word" and value:
         word = value.lower().strip()
         if word in s['banned_words']: s['banned_words'].remove(word)
         save_db(db)
-        await interaction.response.send_message(embed=base_embed("✅ Removed", f"Unbanned `{word}`.", SUCCESS_GREEN), ephemeral=True)
+        await interaction.followup.send(embed=base_embed("✅ Removed", f"Unbanned `{word}`.", SUCCESS_GREEN), ephemeral=True)
     elif action == "toggle_welcome":
         s['welcome_dm'] = not s['welcome_dm']
         save_db(db)
-        await interaction.response.send_message(embed=base_embed("👋 Welcome DMs", f"Now **{'ON' if s['welcome_dm'] else 'OFF'}**.", MINT_ACCENT), ephemeral=True)
+        await interaction.followup.send(embed=base_embed("👋 Welcome DMs", f"Now **{'ON' if s['welcome_dm'] else 'OFF'}**.", MINT_ACCENT), ephemeral=True)
     elif action == "toggle_scrim":
         s['scrim_notifications'] = not s.get('scrim_notifications', True)
         save_db(db)
-        await interaction.response.send_message(embed=base_embed("🔔 Notifications", f"Now **{'ON' if s['scrim_notifications'] else 'OFF'}**.", MINT_ACCENT), ephemeral=True)
+        await interaction.followup.send(embed=base_embed("🔔 Notifications", f"Now **{'ON' if s['scrim_notifications'] else 'OFF'}**.", MINT_ACCENT), ephemeral=True)
     elif action == "show":
         embed = base_embed(f"⚙️ Settings — {interaction.guild.name}")
         embed.add_field(name="🚫 Banned Words", value=", ".join(s['banned_words']) or "None", inline=False)
         embed.add_field(name="👋 Welcome DMs", value="ON" if s['welcome_dm'] else "OFF", inline=True)
         embed.add_field(name="🔔 Notifications", value="ON" if s.get('scrim_notifications', True) else "OFF", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="leaderboard", description="🏆 Show top servers using the bot.")
 async def leaderboard(interaction: discord.Interaction):
+    # Immediate deferral to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+    
     sorted_stats = sorted(command_usage_stats.items(), key=lambda x: x[1]['find_scrim'], reverse=True)[:10]
     desc = ""
     for i, (gid, st) in enumerate(sorted_stats, 1):
@@ -522,30 +528,34 @@ async def leaderboard(interaction: discord.Interaction):
         desc += f"**{i}. {name}**\nRequests: `{st['find_scrim']}` | Accepts: `{st['accepted']}`\n\n"
     
     embed = base_embed("🏆 Server Leaderboard", desc or "No data yet.", MINT_ACCENT)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="banbot", description="⛔ Admin: Leave a server.")
 async def banbot(interaction: discord.Interaction):
+    # Immediate deferral to prevent timeout
+    await interaction.response.defer(ephemeral=True)
+    
     if interaction.user.id not in authorized_users:
-        await interaction.response.send_message("Unauthorized.", ephemeral=True)
+        await interaction.followup.send("Unauthorized.", ephemeral=True)
         return
     
     options = [discord.SelectOption(label=g.name[:100], value=str(g.id)) for g in bot.guilds[:25]]
     if not options:
-        await interaction.response.send_message("No servers found.", ephemeral=True)
+        await interaction.followup.send("No servers found.", ephemeral=True)
         return
 
     select = ui.Select(placeholder="Select a server to leave...", options=options)
     async def select_callback(inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
         g = bot.get_guild(int(select.values[0]))
         if g:
             await g.leave()
-            await inter.response.send_message(f"Left **{g.name}**.", ephemeral=True)
-        else: await inter.response.send_message("Not found.", ephemeral=True)
+            await inter.followup.send(f"Left **{g.name}**.", ephemeral=True)
+        else: await inter.followup.send("Not found.", ephemeral=True)
 
     select.callback = select_callback
     view = ui.View(); view.add_item(select)
-    await interaction.response.send_message("Choose a server:", view=view, ephemeral=True)
+    await interaction.followup.send("Choose a server:", view=view, ephemeral=True)
 
 @bot.tree.command(name="update", description="🚀 Global bot update.")
 @app_commands.describe(action="Action", value="Notes")
@@ -556,13 +566,16 @@ async def banbot(interaction: discord.Interaction):
     app_commands.Choice(name="Force Sync", value="sync_all")
 ])
 async def global_update(interaction: discord.Interaction, action: str, value: str = None):
+    # Immediate deferral to prevent timeout
+    await interaction.response.defer(ephemeral=True)
+    
     if interaction.user.id not in authorized_users:
-        await interaction.response.send_message("Unauthorized.", ephemeral=True)
+        await interaction.followup.send("Unauthorized.", ephemeral=True)
         return
 
     if action == "push_update":
         v = increment_version()
-        await interaction.response.send_message(f"🚀 Pushing v{v}...", ephemeral=True)
+        await interaction.followup.send(f"🚀 Pushing v{v}...", ephemeral=True)
         embed = base_embed(f"📢 Bot Updated to v{v}", value or "New features added! Use `/findscrim`.", MINT_ACCENT)
         count = 0
         for uid in list(users_who_received_requirements):
@@ -572,12 +585,11 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
                 except: pass
         await interaction.followup.send(f"✅ Notified {count} users.", ephemeral=True)
     elif action == "sync_all":
-        await interaction.response.defer(ephemeral=True)
         synced = await bot.tree.sync()
         await interaction.followup.send(f"Synced {len(synced)} commands.", ephemeral=True)
     elif action == "g_add" and value:
         if value.lower() not in global_settings['banned_words']: global_settings['banned_words'].append(value.lower())
-        save_db(db); await interaction.response.send_message(f"Global Ban: `{value}`.", ephemeral=True)
+        save_db(db); await interaction.followup.send(f"Global Ban: `{value}`.", ephemeral=True)
 
 # ─── Web Server ──────────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
