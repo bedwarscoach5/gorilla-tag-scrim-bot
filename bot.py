@@ -127,7 +127,7 @@ AURORA_BLUE   = 0x3498DB
 # ─── Embed Builders ──────────────────────────────────────────────────────────
 def base_embed(title: str, description: str = "", color: int = BLURPLE) -> discord.Embed:
     embed = discord.Embed(title=title, description=description, color=color)
-    embed.set_footer(text="🦍 Aurorasystem • created by frog360")
+    embed.set_footer(text="made by frog 360\npowered by aurorasystem")
     return embed
 
 def scrim_embed(scrim_id: str) -> discord.Embed:
@@ -155,7 +155,7 @@ def scrim_embed(scrim_id: str) -> discord.Embed:
     embed.add_field(name="👥 Teams", value=f"{accepted} / {max_t}", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
     embed.add_field(name="🏷️ Accepted Teams", value=team_list, inline=False)
-    embed.set_footer(text="🦍 Aurorasystem • created by frog360  |  Click 🎮 Join Scrim to enter")
+    embed.set_footer(text="made by frog 360\npowered by aurorasystem  |  Click 🎮 Join Scrim to enter")
     embed.set_image(url="https://i.imgur.com/your_aurora_banner.gif")
     return embed
 
@@ -370,7 +370,7 @@ class ScrimView(ui.View):
                         msg = await channel.fetch_message(msg_id)
                         expired_embed = msg.embeds[0]
                         expired_embed.color = 0x95A5A6
-                        expired_embed.set_footer(text="🦍 Aurorasystem • This scrim has expired")
+                        expired_embed.set_footer(text="made by frog 360\npowered by aurorasystem  |  This scrim has expired")
                         await msg.edit(embed=expired_embed, view=self)
                 except: pass
 
@@ -411,7 +411,7 @@ async def broadcast_scrim(scrim_id: str):
 @bot.tree.command(name="help", description="📖 Show all available commands.")
 async def help_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    embed = base_embed("🦍  Aurora Help Menu", "Here are all the commands you can use with the Scrim Finder bot.", MINT_ACCENT)
+    embed = base_embed("🦍  Help Menu", "Here are all the commands you can use with the Scrim Finder bot.", MINT_ACCENT)
     
     embed.add_field(name="🚀 Scrim Commands", value=(
         "• **/findscrim** — Broadcast a scrim request to all servers.\n"
@@ -425,7 +425,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(name="🛡️ Admin & Owner", value=(
         "• **/bot_stats** — View global bot statistics (Owner only).\n"
-        "• **/force_verify** — Manually verify a user (Owner only).\n"
+        "• **/force_verify** — Manually verify a user by ID (Owner only).\n"
         "• **/join** — Force join verified users to a server (Owner only).\n"
         "• **/banbot** — Make the bot leave a server (Owner only).\n"
         "• **/update** — Push global updates and sync commands (Owner only)."
@@ -600,14 +600,14 @@ async def verify(interaction: discord.Interaction):
             interaction.guild.default_role: discord.PermissionOverwrite(send_messages=False),
             interaction.guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)
         }
-        channel = await interaction.guild.create_text_channel('verify-bot', overwrites=overwrites, topic="Verification for Gorilla Tag Scrim Finder")
+        channel = await interaction.guild.create_text_channel('verify-bot', overwrites=overwrites, topic="Verification for Scrim Finder")
         
         verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
         
         embed = base_embed(
-            title="🦍  Aurora Verification",
+            title="🦍  Verification Prompt",
             description=(
-                "Welcome to the Gorilla Tag Scrim Finder! To access competitive scrims and global features, you must verify your account.\n\n"
+                "Welcome to the Scrim Finder! To access competitive scrims and global features, you must verify your account.\n\n"
                 "**Why verify?**\n"
                 "✅  Join scrims instantly\n"
                 "✅  Track your competitive stats\n"
@@ -626,15 +626,33 @@ async def verify(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"❌ Failed to create channel: {e}", ephemeral=True)
 
-@bot.tree.command(name="force_verify", description="🔒 Admin: Globally verify a user.")
-@app_commands.describe(user="The user to verify")
-async def force_verify(interaction: discord.Interaction, user: discord.User):
+@bot.tree.command(name="force_verify", description="🔒 Admin: Globally verify a user by ID.")
+@app_commands.describe(user_id="The Discord ID of the user to verify")
+async def force_verify(interaction: discord.Interaction, user_id: str):
     await interaction.response.defer(ephemeral=True)
     if interaction.user.id not in authorized_users:
         await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
         return
-    update_user_data(user.id, verified=True)
-    await interaction.followup.send(f"✅ Successfully verified **{user.name}** globally.", ephemeral=True)
+    
+    try:
+        uid_int = int(user_id)
+        update_user_data(uid_int, verified=True)
+        
+        # Remote Role Removal across all servers
+        removed_count = 0
+        for guild in bot.guilds:
+            member = guild.get_member(uid_int)
+            if member:
+                role = discord.utils.get(guild.roles, name="Unverified")
+                if role:
+                    try:
+                        await member.remove_roles(role)
+                        removed_count += 1
+                    except: pass
+        
+        await interaction.followup.send(f"✅ Successfully verified **{user_id}** globally and removed 'Unverified' role in {removed_count} servers.", ephemeral=True)
+    except ValueError:
+        await interaction.followup.send("❌ Invalid User ID.", ephemeral=True)
 
 @bot.tree.command(name="bot_stats", description="📊 Admin: Show detailed bot statistics.")
 async def bot_stats(interaction: discord.Interaction):
