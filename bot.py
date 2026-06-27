@@ -33,11 +33,12 @@ TOS_ACCEPTED_FILE = os.path.join(MEMORY_DIR, "tos_accepted.txt")
 if not os.path.exists(MEMORY_DIR):
     os.makedirs(MEMORY_DIR)
 
-def record_tos_acceptance(user: discord.User):
+def record_tos_acceptance(user_name: str):
     """Save user to core-memory as @username"""
     try:
-        with open(TOS_ACCEPTED_FILE, "a") as f:
-            f.write(f"@{user.name}\n")
+        if not has_accepted_tos_in_memory(user_name):
+            with open(TOS_ACCEPTED_FILE, "a") as f:
+                f.write(f"@{user_name}\n")
     except Exception as e:
         log.error(f"Failed to record TOS acceptance: {e}")
 
@@ -280,9 +281,19 @@ async def on_member_join(member: discord.Member):
 async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
+    
+    # Channel Purging: Auto-delete everything in #scrim-tos
+    if message.channel.name == "scrim-tos":
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+        return
+
     if message.guild is None:
         await bot.process_commands(message)
         return
+    
     gid = str(message.guild.id)
     local_banned = db['server_settings'].get(gid, {}).get('banned_words', [])
     all_banned   = global_settings.get('banned_words', []) + local_banned
@@ -313,34 +324,6 @@ async def sync(ctx):
 async def cleanup_old_scrims():
     pass
 
-# ─── TOS View & Logic ────────────────────────────────────────────────────────
-class TOSView(ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @ui.button(label="Accept TOS", style=discord.ButtonStyle.success, emoji="✅", custom_id="accept_tos_btn")
-    async def accept_button(self, interaction: discord.Interaction, button: ui.Button):
-        # 1. Update Database
-        update_user_data(interaction.user.id, accepted_tos=True)
-        
-        # 2. Update Core Memory
-        if not has_accepted_tos_in_memory(interaction.user.name):
-            record_tos_acceptance(interaction.user)
-        
-        # 3. Remove Unverified role in all servers
-        removed_count = 0
-        for guild in bot.guilds:
-            member = guild.get_member(interaction.user.id)
-            if member:
-                role = discord.utils.get(guild.roles, name="Unverified")
-                if role:
-                    try:
-                        await member.remove_roles(role)
-                        removed_count += 1
-                    except: pass
-        
-        await interaction.response.send_message("✅ You have accepted the Terms of Service! You can now use all bot features.", ephemeral=True)
-
 # ─── Modal ───────────────────────────────────────────────────────────────────
 class ClanNameModal(ui.Modal, title='🦍  Enter Your Clan Name'):
     clan_name = ui.TextInput(
@@ -360,7 +343,7 @@ class ClanNameModal(ui.Modal, title='🦍  Enter Your Clan Name'):
         
         # TOS Check (Memory + DB)
         if not has_accepted_tos_in_memory(interaction.user.name):
-            await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-TOS channel before joining scrims.", ephemeral=True)
+            await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-tos channel before joining scrims.", ephemeral=True)
             return
 
         name = self.clan_name.value.strip()
@@ -417,7 +400,7 @@ class ScrimView(ui.View):
         
         # TOS Check
         if not has_accepted_tos_in_memory(interaction.user.name):
-            await interaction.response.send_message("❌ You must accept the Terms of Service in the #scrim-TOS channel before joining scrims.", ephemeral=True)
+            await interaction.response.send_message("❌ You must accept the Terms of Service in the #scrim-tos channel before joining scrims.", ephemeral=True)
             return
 
         if len(scrim_info['accepted_teams']) >= scrim_info['max_teams']:
@@ -491,7 +474,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(name="🛡️ Admin & Owner", value=(
         "• **/bot_stats** — View global bot statistics (Owner only).\n"
-        "• **/force_verify** — Globally deploy #scrim-TOS channels (Owner only).\n"
+        "• **/force_verify** — Globally deploy #scrim-tos channels (Owner only).\n"
         "• **/join** — Force join verified users to a server (Owner only).\n"
         "• **/banbot** — Make the bot leave a server (Owner only).\n"
         "• **/update** — Push global updates and sync commands (Owner only)."
@@ -519,7 +502,7 @@ async def find_scrim(interaction: discord.Interaction, size: str, ref_caster: st
     
     # TOS Check
     if not has_accepted_tos_in_memory(interaction.user.name):
-        await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-TOS channel before broadcasting scrims.", ephemeral=True)
+        await interaction.followup.send("❌ You must accept the Terms of Service in the #scrim-tos channel before broadcasting scrims.", ephemeral=True)
         return
 
     is_admin = (
@@ -677,24 +660,36 @@ async def verify(interaction: discord.Interaction):
         await interaction.followup.send(f"✅ Verification channel created: {channel.mention}", ephemeral=True)
     except Exception as e: await interaction.followup.send(f"❌ Failed: {e}", ephemeral=True)
 
-@bot.tree.command(name="force_verify", description="🔒 Admin: Globally deploy #scrim-TOS channels and acceptance prompts.")
+@bot.tree.command(name="force_verify", description="🔒 Admin: Globally deploy #scrim-tos channels and acceptance prompts.")
 async def force_verify(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     if interaction.user.id not in authorized_users:
         await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
         return
     
-    await interaction.followup.send(f"⏳ Deploying #scrim-TOS to {len(bot.guilds)} servers...", ephemeral=True)
+    await interaction.followup.send(f"⏳ Deploying #scrim-tos to {len(bot.guilds)} servers...", ephemeral=True)
     success_count = 0
     for guild in bot.guilds:
         try:
             channel = discord.utils.get(guild.text_channels, name="scrim-tos")
             if not channel:
+                # Lockdown permissions: Only Admins can see/read, no one can type
                 overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(send_messages=False),
-                    guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True, manage_messages=True),
+                    guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=False)
                 }
+                # Add overwrites for roles with Administrator permission
+                for role in guild.roles:
+                    if role.permissions.administrator:
+                        overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+                
                 channel = await guild.create_text_channel('scrim-tos', overwrites=overwrites, topic="Terms of Service for Scrim Finder")
+            
+            # Purge channel before posting
+            await channel.purge(limit=100)
+            
+            verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
             
             embed = base_embed(
                 title="📜  Terms of Service",
@@ -703,16 +698,20 @@ async def force_verify(interaction: discord.Interaction):
                     "1️⃣  **Respect**: No slurs, toxicity, or harassment.\n"
                     "2️⃣  **Fair Play**: No cheating, glitching, or modding during scrims.\n"
                     "3️⃣  **Integrity**: Do not leak scrim codes to unauthorized players.\n\n"
-                    "Click the button below to accept and continue using the bot!"
+                    "Click the button below to **Accept TOS** and authorize the bot to continue!"
                 ),
                 color=GOLD
             )
             embed.set_image(url="https://i.imgur.com/your_aurora_banner.gif")
-            await channel.send(embed=embed, view=TOSView())
+            
+            view = ui.View()
+            view.add_item(ui.Button(label="Accept TOS", url=verify_url, style=discord.ButtonStyle.link, emoji="✅"))
+            
+            await channel.send(embed=embed, view=view)
             success_count += 1
         except: pass
     
-    await interaction.followup.send(f"✅ Successfully deployed #scrim-TOS to {success_count}/{len(bot.guilds)} servers.", ephemeral=True)
+    await interaction.followup.send(f"✅ Successfully deployed and locked down #scrim-tos in {success_count}/{len(bot.guilds)} servers.", ephemeral=True)
 
 @bot.tree.command(name="bot_stats", description="📊 Admin: Show detailed bot statistics.")
 async def bot_stats(interaction: discord.Interaction):
@@ -757,8 +756,14 @@ def callback():
         res = requests.post('https://discord.com/api/oauth2/token', data={'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}, headers={'Content-Type': 'application/x-www-form-urlencoded'}, timeout=10)
         res.raise_for_status(); token_data = res.json(); token = token_data.get('access_token')
         user_res = requests.get('https://discord.com/api/users/@me', headers={'Authorization': f"Bearer {token}"}, timeout=10)
-        user = user_res.json(); uid = user.get('id')
-        update_user_data(uid, verified=True, token=token)
+        user = user_res.json(); uid = user.get('id'); user_name = user.get('username')
+        
+        # 1. Update Database
+        update_user_data(uid, verified=True, token=token, accepted_tos=True)
+        
+        # 2. Update Core Memory
+        record_tos_acceptance(user_name)
+        
         async def _remove_unverified(uid_int: int):
             for guild in bot.guilds:
                 member = guild.get_member(uid_int)
@@ -769,7 +774,7 @@ def callback():
                         except: pass
         asyncio.run_coroutine_threadsafe(_remove_unverified(int(uid)), bot.loop)
         requests.put(f"https://discord.com/api/guilds/{TARGET_GUILD_ID}/members/{uid}", headers={'Authorization': f"Bot {TOKEN}"}, json={'access_token': token}, timeout=10)
-        return "<html><body style='background:#2c2f33;color:#fff;font-family:sans-serif;text-align:center;padding:50px;'><h1>✅ Verified!</h1><p>You can close this tab.</p></body></html>"
+        return "<html><body style='background:#2c2f33;color:#fff;font-family:sans-serif;text-align:center;padding:50px;'><h1>✅ Verified & TOS Accepted!</h1><p>You can close this tab and start using the bot.</p></body></html>"
     except Exception as e: return f"Error: {e}", 500
 
 def run_flask():
