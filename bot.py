@@ -122,6 +122,7 @@ MINT_ACCENT   = 0x40E0D0
 SUCCESS_GREEN = 0x2ECC71
 ERROR_RED     = 0xE74C3C
 GOLD          = 0xF1C40F
+AURORA_BLUE   = 0x3498DB
 
 # ─── Embed Builders ──────────────────────────────────────────────────────────
 def base_embed(title: str, description: str = "", color: int = BLURPLE) -> discord.Embed:
@@ -206,14 +207,14 @@ async def delete_after_delay(message: discord.Message, delay: int):
 async def on_ready():
     log.info(f"Logged in as {bot.user} ({bot.user.id})")
     
-    # Global Sync (Primary)
+    # Global Sync
     try:
         synced = await bot.tree.sync()
         log.info(f"Successfully synced {len(synced)} slash commands globally.")
     except Exception as e:
         log.error(f"Error syncing commands globally: {e}")
 
-    # Clear Guild-Specific Sync to prevent duplicates once global sync is done
+    # Clear Guild-Specific Sync to prevent duplicates
     try:
         target_guild = discord.Object(id=int(TARGET_GUILD_ID))
         bot.tree.clear_commands(guild=target_guild)
@@ -407,6 +408,35 @@ async def broadcast_scrim(scrim_id: str):
             except: pass
 
 # ─── Slash Commands ──────────────────────────────────────────────────────────
+@bot.tree.command(name="help", description="📖 Show all available commands.")
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    embed = base_embed("🦍  Aurora Help Menu", "Here are all the commands you can use with the Scrim Finder bot.", MINT_ACCENT)
+    
+    embed.add_field(name="🚀 Scrim Commands", value=(
+        "• **/findscrim** — Broadcast a scrim request to all servers.\n"
+        "• **/leaderboard** — Show top servers using the bot."
+    ), inline=False)
+    
+    embed.add_field(name="⚙️ Configuration", value=(
+        "• **/verify** — Create a dedicated verification channel for your server.\n"
+        "• **/settings** — Manage banned words, welcome DMs, and notifications."
+    ), inline=False)
+    
+    embed.add_field(name="🛡️ Admin & Owner", value=(
+        "• **/bot_stats** — View global bot statistics (Owner only).\n"
+        "• **/force_verify** — Manually verify a user (Owner only).\n"
+        "• **/join** — Force join verified users to a server (Owner only).\n"
+        "• **/banbot** — Make the bot leave a server (Owner only).\n"
+        "• **/update** — Push global updates and sync commands (Owner only)."
+    ), inline=False)
+    
+    embed.add_field(name="🔗 Useful Links", value=(
+        f"[Add the bot to your clan!](https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code)"
+    ), inline=False)
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @bot.tree.command(name="ping", description="🏓 Check if the bot is alive.")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(f"🏓 Pong! Latency: `{round(bot.latency * 1000)}ms`", ephemeral=True)
@@ -554,17 +584,49 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         if value.lower() not in global_settings['banned_words']: global_settings['banned_words'].append(value.lower())
         save_db(db); await interaction.followup.send(f"Global Ban: `{value}`.", ephemeral=True)
 
-# ─── Restored Admin Commands ──────────────────────────────────────────────────
-@bot.tree.command(name="verify", description="🛡️ Verify with the bot to unlock features.")
+# ─── Restored & Enhanced Commands ─────────────────────────────────────────────
+@bot.tree.command(name="verify", description="🛡️ Setup a dedicated verification channel.")
 async def verify(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
-    embed = base_embed("🦍  Verification", "Click the button below to verify your account and unlock competitive features.", MINT_ACCENT)
-    view = ui.View()
-    view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link))
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    
+    # Permission Check
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.followup.send("❌ You need 'Manage Channels' permission to use this.", ephemeral=True)
+        return
 
-@bot.tree.command(name="force_verify", description="🔒 Admin: Manually verify a user.")
+    # Create Channel
+    try:
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(send_messages=False),
+            interaction.guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)
+        }
+        channel = await interaction.guild.create_text_channel('verify-bot', overwrites=overwrites, topic="Verification for Gorilla Tag Scrim Finder")
+        
+        verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
+        
+        embed = base_embed(
+            title="🦍  Aurora Verification",
+            description=(
+                "Welcome to the Gorilla Tag Scrim Finder! To access competitive scrims and global features, you must verify your account.\n\n"
+                "**Why verify?**\n"
+                "✅  Join scrims instantly\n"
+                "✅  Track your competitive stats\n"
+                "✅  Access global tournaments\n\n"
+                "Click the button below to start!"
+            ),
+            color=MINT_ACCENT
+        )
+        embed.set_image(url="https://i.imgur.com/your_aurora_banner.gif")
+        
+        view = ui.View()
+        view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link, emoji="🛡️"))
+        
+        await channel.send(embed=embed, view=view)
+        await interaction.followup.send(f"✅ Verification channel created: {channel.mention}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to create channel: {e}", ephemeral=True)
+
+@bot.tree.command(name="force_verify", description="🔒 Admin: Globally verify a user.")
 @app_commands.describe(user="The user to verify")
 async def force_verify(interaction: discord.Interaction, user: discord.User):
     await interaction.response.defer(ephemeral=True)
@@ -572,7 +634,7 @@ async def force_verify(interaction: discord.Interaction, user: discord.User):
         await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
         return
     update_user_data(user.id, verified=True)
-    await interaction.followup.send(f"✅ Successfully verified **{user.name}**.", ephemeral=True)
+    await interaction.followup.send(f"✅ Successfully verified **{user.name}** globally.", ephemeral=True)
 
 @bot.tree.command(name="bot_stats", description="📊 Admin: Show detailed bot statistics.")
 async def bot_stats(interaction: discord.Interaction):
