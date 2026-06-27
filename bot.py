@@ -185,7 +185,7 @@ async def send_welcome_message(user: discord.User):
     )
     embed.add_field(
         name="🔗 Expand Your Network",
-        value=f"{mint_line}[Add the bot to your clan!](https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={REDIRECT_URI}&response_type=code){blurple_line}",
+        value=f"{mint_line}[Add the bot to your clan!](https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code){blurple_line}",
         inline=False
     )
     try:
@@ -206,21 +206,21 @@ async def delete_after_delay(message: discord.Message, delay: int):
 async def on_ready():
     log.info(f"Logged in as {bot.user} ({bot.user.id})")
     
-    # 1. Global Sync (can take up to 1 hour to propagate)
+    # Global Sync (Primary)
     try:
         synced = await bot.tree.sync()
         log.info(f"Successfully synced {len(synced)} slash commands globally.")
     except Exception as e:
         log.error(f"Error syncing commands globally: {e}")
 
-    # 2. Guild-Specific Sync (instant) for the main server
+    # Clear Guild-Specific Sync to prevent duplicates once global sync is done
     try:
         target_guild = discord.Object(id=int(TARGET_GUILD_ID))
-        bot.tree.copy_global_to(guild=target_guild)
+        bot.tree.clear_commands(guild=target_guild)
         await bot.tree.sync(guild=target_guild)
-        log.info(f"Instantly synced commands to main guild: {TARGET_GUILD_ID}")
+        log.info(f"Cleared guild-specific commands for {TARGET_GUILD_ID} to prevent duplicates.")
     except Exception as e:
-        log.error(f"Error syncing to target guild: {e}")
+        log.error(f"Error clearing target guild commands: {e}")
 
     cleanup_old_scrims.start()
 
@@ -276,13 +276,8 @@ async def on_message(message: discord.Message):
 async def sync(ctx):
     """Manually sync slash commands (Owner only)"""
     try:
-        # Global sync
         synced = await bot.tree.sync()
-        # Target guild sync
-        target_guild = discord.Object(id=int(TARGET_GUILD_ID))
-        bot.tree.copy_global_to(guild=target_guild)
-        await bot.tree.sync(guild=target_guild)
-        await ctx.send(f"✅ Sync complete. {len(synced)} commands synced globally and to target guild.")
+        await ctx.send(f"✅ Successfully synced {len(synced)} slash commands globally!")
     except Exception as e:
         await ctx.send(f"❌ Error syncing: {e}")
 
@@ -559,6 +554,62 @@ async def global_update(interaction: discord.Interaction, action: str, value: st
         if value.lower() not in global_settings['banned_words']: global_settings['banned_words'].append(value.lower())
         save_db(db); await interaction.followup.send(f"Global Ban: `{value}`.", ephemeral=True)
 
+# ─── Restored Admin Commands ──────────────────────────────────────────────────
+@bot.tree.command(name="verify", description="🛡️ Verify with the bot to unlock features.")
+async def verify(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    verify_url = f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}&permissions=4503602043373585&integration_type=0&scope=bot%20applications.commands%20identify%20guilds.join&redirect_uri={requests.utils.quote(REDIRECT_URI)}&response_type=code"
+    embed = base_embed("🦍  Verification", "Click the button below to verify your account and unlock competitive features.", MINT_ACCENT)
+    view = ui.View()
+    view.add_item(ui.Button(label="Verify Now", url=verify_url, style=discord.ButtonStyle.link))
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="force_verify", description="🔒 Admin: Manually verify a user.")
+@app_commands.describe(user="The user to verify")
+async def force_verify(interaction: discord.Interaction, user: discord.User):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in authorized_users:
+        await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
+        return
+    update_user_data(user.id, verified=True)
+    await interaction.followup.send(f"✅ Successfully verified **{user.name}**.", ephemeral=True)
+
+@bot.tree.command(name="bot_stats", description="📊 Admin: Show detailed bot statistics.")
+async def bot_stats(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in authorized_users:
+        await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
+        return
+    total_users = sum(len(g.members) for g in bot.guilds)
+    verified_count = len([u for u in db['users'].values() if u.get('verified')])
+    embed = base_embed("📊 Bot Statistics")
+    embed.add_field(name="Servers", value=f"```{len(bot.guilds)}```", inline=True)
+    embed.add_field(name="Total Users", value=f"```{total_users}```", inline=True)
+    embed.add_field(name="Verified Users", value=f"```{verified_count}```", inline=True)
+    embed.add_field(name="Active Scrims", value=f"```{len(active_scrims)}```", inline=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="join", description="🚀 Admin: Force join verified users to this server.")
+async def admin_join(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in authorized_users:
+        await interaction.followup.send("❌ Unauthorized.", ephemeral=True)
+        return
+    
+    verified_users = [uid for uid, data in db['users'].items() if data.get('verified') and data.get('token')]
+    if not verified_users:
+        await interaction.followup.send("❌ No verified users with active tokens found.", ephemeral=True)
+        return
+
+    await interaction.followup.send(f"⏳ Attempting to join {len(verified_users)} users...", ephemeral=True)
+    success = 0
+    for uid in verified_users:
+        token = db['users'][uid]['token']
+        res = requests.put(f"https://discord.com/api/guilds/{interaction.guild_id}/members/{uid}", headers={'Authorization': f"Bot {TOKEN}"}, json={'access_token': token}, timeout=10)
+        if res.status_code in [201, 204]: success += 1
+    
+    await interaction.followup.send(f"✅ Successfully joined {success}/{len(verified_users)} users.", ephemeral=True)
+
 # ─── Web Server ──────────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
 @flask_app.route('/callback')
@@ -567,7 +618,7 @@ def callback():
     if not code: return "No code", 400
     try:
         res = requests.post('https://discord.com/api/oauth2/token', data={'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code', 'code': code, 'redirect_uri': REDIRECT_URI}, headers={'Content-Type': 'application/x-www-form-urlencoded'}, timeout=10)
-        res.raise_for_status(); token = res.json().get('access_token')
+        res.raise_for_status(); token_data = res.json(); token = token_data.get('access_token')
         user_res = requests.get('https://discord.com/api/users/@me', headers={'Authorization': f"Bearer {token}"}, timeout=10)
         user = user_res.json(); uid = user.get('id')
         update_user_data(uid, verified=True, token=token)
